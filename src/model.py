@@ -1,17 +1,17 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-
+import random
 
 class EncoderRNN(nn.Module):
     def __init__(self, vocab_size, hidden_size, weight_matrix, device):
         super(EncoderRNN, self).__init__()
         self.device = device
         self.hidden_size = hidden_size
-
+        # embedding layer
         self.embed_layer = nn.Embedding(vocab_size, hidden_size)
-        self.embed_layer.load_state_dict({'weight': torch.from_numpy(weight_matrix)})
-        self.embed_layer.requires_grad = False
+        self.embed_layer.load_state_dict({'weight': torch.from_numpy(weight_matrix)})   # call pre-trained matrix
+        self.embed_layer.requires_grad = False  # do not train embedding layer
         self.LSTM = nn.LSTM(hidden_size, hidden_size)
 
     def forward(self, input, hidden):
@@ -20,6 +20,7 @@ class EncoderRNN(nn.Module):
         return output, hidden
 
     def init_hidden(self):
+        # init_hidden state is zero
         hidden = (torch.zeros(1, 1, self.hidden_size, device=self.device),
                  torch.zeros(1, 1, self.hidden_size, device=self.device))
         return hidden
@@ -64,18 +65,19 @@ class Seq2Seq(nn.Module):
         target_length = target_tensor.size(0)
         # Encoder
         encoder_hidden = self.encoder.init_hidden()
-        encoder_outputs = torch.zeros(self.max_length, self.encoder.hidden_size)  # to hold encoder output
+        encoder_outputs = []  # to hold encoder output
         for idx in range(input_length):
             encoder_output, encoder_hidden = self.encoder(
                 input_tensor[idx], encoder_hidden)
-            encoder_outputs[idx] = encoder_output[0, 0]
+            encoder_outputs.append(encoder_output)
 
         # Decoder
         decoder_input = target_tensor[0]
         decoder_hidden = encoder_hidden
         decoder_outputs = []
+
         # Not to use teacher_forcing_ratio = 0.0
-        use_teacher_forcing = True if random.random() < self.teacher_forcing_ratio else False
+        use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
         if use_teacher_forcing:
             # Teacher forcing: Feed the target as the next input
             for idx in range(1, target_length):
