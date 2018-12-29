@@ -5,7 +5,7 @@ cfg ={
     "hidden_size": 50,
     "max_length": 50,
     "n_epochs": 10,
-    "batch_size": 1,
-    "save_steps": 5,
+    "batch_size": 10,
+    "save_steps": 100,
     "learning_rate": 0.1
 }

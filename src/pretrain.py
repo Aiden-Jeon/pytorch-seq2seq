@@ -35,12 +35,10 @@ class SentenceTensors:
 
 class Trainer(object):
     """Training Helper Class"""
-    def __init__(self, cfg, file_dir, model, word_to_index, encoder_optimizer, decoder_optimizer, save_dir, device):
+    def __init__(self, cfg, file_dir, model, word_to_index, save_dir, device):
         self.cfg = cfg
         self.file = open(file_dir, 'r', errors='ignore')
         self.model = model
-        self.encoder_optimizer = encoder_optimizer
-        self.decoder_optimizer = decoder_optimizer
         self.sentence_tensors = SentenceTensors(word_to_index, device)
         self.save_dir = save_dir
         self.device = device
@@ -55,10 +53,10 @@ class Trainer(object):
                 batch.append(temp)
         return batch
 
-    def train(self, get_loss, model_file=None):
+    def train(self, get_loss, encoder_optimizer, decoder_optimizer, model_file=None):
         """ Train Loop """
         self.model.train() # train mode
-        # self.load(model_file)
+        self.load(model_file)
         model = self.model.to(self.device)
         global_step = 0 # global iteration steps regardless of epochs
         for e in range(self.cfg['n_epochs']):
@@ -66,8 +64,8 @@ class Trainer(object):
             batch = self.data_loader()
             while len(batch) == self.cfg['batch_size']:
                 for i, pair in enumerate(batch):
-                    self.decoder_optimizer.zero_grad()
-                    self.encoder_optimizer.zero_grad()
+                    decoder_optimizer.zero_grad()
+                    encoder_optimizer.zero_grad()
 
                     input_tensor, target_tensor = self.sentence_tensors.pair_to_tensors((pair, pair))
                     encoder_outputs, decoder_outputs = model(input_tensor, target_tensor)
@@ -75,33 +73,32 @@ class Trainer(object):
                     loss_sum += loss
 
                     loss.backward()
-                    self.decoder_optimizer.step()
-                    self.encoder_optimizer.step()
-                    global_step += 1
+                    decoder_optimizer.step()
+                    encoder_optimizer.step()
 
-                    if global_step % self.cfg['save_steps'] == 0: # save
-                    if global_step % self.cfg['save_steps'] == 0: # save
-                        self.save(global_step)
-
-                    if global_step % 1 == 0:
-                        print(loss_sum / global_step)
+                global_step += 1
+                if global_step % self.cfg['save_steps'] == 0: # save
+                    self.save(global_step)
+            print(loss_sum)
         self.save(global_step)
 
-    def eval(self, evaluate, model_file):
+    def eval(self, index_to_word, model_file):
         """ Evaluation Loop """
         self.model.eval() # evaluation mode
-        # self.load(model_file, None)
+        self.load(model_file)
         model = self.model.to(self.device)
-
         results = [] # prediction results
-        iter_bar = tqdm(self.data_iter, desc='Iter (loss=X.XXX)')
-        for batch in iter_bar:
-            batch = [t.to(self.device) for t in batch]
-            with torch.no_grad(): # evaluation without gradient calculation
-                accuracy, result = evaluate(model, batch) # accuracy to print
-            results.append(result)
-
-            iter_bar.set_description('Iter(acc=%5.3f)'%accuracy)
+        batch = self.data_loader()
+        print(len(batch))
+        for i, pair in enumerate(batch):
+            input_tensor, target_tensor = self.sentence_tensors.pair_to_tensors((pair, pair))
+            _, decoder_outputs = model(input_tensor, target_tensor)
+            result = []
+            for idx in range(len(decoder_outputs)):
+                index = torch.argmax(decoder_outputs[idx]).tolist()
+                result.append(index_to_word[index])
+            sentence = ' '.join(result)
+            results.append(sentence)
         return results
 
     def load(self, model_file):
@@ -115,28 +112,30 @@ class Trainer(object):
             os.path.join(self.save_dir, 'model_steps_'+str(i)+'.pt'))
 
 
-def main(data_dir='../data/data.txt', vocab_dir='../data/vocab.txt', embed_dir='../data/glove_common_50d.txt', save_dir='../model/181228'):
+def get_loss(target, output):
+    length = min(len(target), len(output))
+    criterion = nn.NLLLoss()
+    loss = 0
+    for idx in range(length):
+        loss += criterion(output[idx], target[idx])
+    return loss
+
+
+def main(mode, data_dir='../data/', save_dir='../model/181229', eval_dir=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     cfg = config.cfg
-    word_to_index, index_to_word = utils.make_index_dict(vocab_dir)
-    weight_matrix = utils.embedding_params(embed_dir, 50)
+    word_to_index, index_to_word = utils.make_index_dict(data_dir+'/vocab.txt')
+    weight_matrix = utils.embedding_params(data_dir+'/glove_common_50d.txt', 50)
     encoder = model.EncoderRNN(
         vocab_size=len(word_to_index.keys()),
         hidden_size=cfg['hidden_size'],
         weight_matrix=weight_matrix,
         device=device)
-    encoder_optimizer = optim.SGD(
-        filter(lambda x: x.requires_grad, encoder.parameters()),
-        lr=cfg['learning_rate'])
     decoder = model.DecoderRNN(
         hidden_size=cfg['hidden_size'],
         output_size=len(word_to_index.keys()),
         weight_matrix=weight_matrix,
         device=device)
-    decoder_optimizer = optim.SGD(
-        filter(lambda x: x.requires_grad, decoder.parameters()),
-        lr=cfg['learning_rate'])
-
     seq2seq = model.Seq2Seq(
         encoder=encoder,
         decoder=decoder,
@@ -144,24 +143,27 @@ def main(data_dir='../data/data.txt', vocab_dir='../data/vocab.txt', embed_dir='
 
     trainer = Trainer(
         cfg=cfg,
-        file_dir=data_dir,
+        file_dir=data_dir+'data.txt',
         model=seq2seq,
         word_to_index=word_to_index,
-        encoder_optimizer=encoder_optimizer,
-        decoder_optimizer=decoder_optimizer,
         save_dir=save_dir,
         device=device)
-
-    def get_loss(target, output):
-        length = min(len(target), len(output))
-        criterion = nn.NLLLoss()
-        loss = 0
-        for idx in range(length):
-            loss += criterion(output[idx], target[idx])
-        return loss
-
-    trainer.train(get_loss)
+    if mode == 'train':
+        encoder_optimizer = optim.SGD(
+            filter(lambda x: x.requires_grad, encoder.parameters()),
+            lr=cfg['learning_rate'])
+        decoder_optimizer = optim.SGD(
+            filter(lambda x: x.requires_grad, decoder.parameters()),
+            lr=cfg['learning_rate'])
+        trainer.train(
+            get_loss=get_loss,
+            encoder_optimizer=encoder_optimizer,
+            decoder_optimizer=decoder_optimizer)
+    elif mode == 'eval':
+        a = trainer.eval(index_to_word, eval_dir)
+        for i in a:
+            print(i)
 
 
 if __name__ == '__main__':
-    main()
+    main(mode='eval', eval_dir='../model/181229/model_steps_1700.pt')
